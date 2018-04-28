@@ -1,0 +1,125 @@
+from time import sleep
+import RPi.GPIO as GPIO
+
+GPIO.setwarnings(False)  # Ignore any errors from initial Pin Configurations
+GPIO.setmode(GPIO.BCM)  # Sets the Pin numbering mode to Broadcom SOC mode "GPIO Mode"
+
+
+class ControlSpeed():
+    def __init__(self):
+        self.FR_DIR = 12  # Front Right Motor Direction Pin
+        self.FR_PWM = 5   # Front Right Motor PWM Pin
+
+        self.FL_DIR = 16  # Front Left Motor Direction Pin
+        self.FL_PWM = 13  # Front Left Motor PWM Pin
+
+        self.BR_DIR = 20  # Back Right Motor Direction Pin
+        self.BR_PWM = 19  # Back Right Motor PWM Pin
+
+        self.BL_DIR = 21  # Back Left Motor Direction Pin
+        self.BL_PWM = 26  # Back Left Motor PWM Pin
+
+        self.Frequency = 100  # Frequency of the Pulse Width Modulation
+
+        self.Pins = [self.FR_DIR, self.FR_PWM, self.FL_DIR, self.FL_PWM, self.BR_DIR, self.BR_PWM, self.BL_DIR, self.BL_PWM]
+        GPIO.setup(self.Pins, GPIO.OUT)  # Sets all motor pins as Output
+
+        self.Straight = [self.FR_DIR, self.FL_DIR, self.BR_DIR, self.BL_DIR]  # Array of pins for Forward Direction
+        self.CW = [self.FL_DIR, self.BL_DIR]  # Array of pins for Rotating Clockwise
+        self.CCW = [self.FR_DIR, self.BR_DIR]  # Array of pins for Rotating Counter Clockwise
+
+        self.BackLeftPwm = GPIO.PWM(self.BL_PWM, self.Frequency)  # Initiates PWM Signal for the Back Left Motor
+        self.BackRightPwm = GPIO.PWM(self.BR_PWM, self.Frequency)  # Initiates PWM Signal for the Back Right Motor
+        self.FrontLeftPwm = GPIO.PWM(self.FL_PWM, self.Frequency)  # Initiates PWM Signal for the Front Left Motor
+        self.FrontRightPwm = GPIO.PWM(self.FR_PWM, self.Frequency)  # Initiates PWM Signal for the Front Right Motor
+        GPIO.output(self.Straight, GPIO.HIGH)  # Sets the direction of the robot initially as Forward
+        self.BackLeftPwm.start(70)  # Starts the Back Left Motor's Speed at 70% Duty Cycles
+        self.FrontLeftPwm.start(70)  # Starts the Front Left Motor's Speed at 70% Duty Cycles
+        self.FrontRightPwm.start(70)  # Starts the Front Right Motor's Speed at 70% Duty Cycles
+        self.BackRightPwm.start(70)  # Starts the Back Right Motor's Speed at 70% Duty Cycles
+
+        print("Motor Module Initialized Successfully")
+
+    def ChangeCycle(self, LeftSide, RightSide):
+        """
+        When called, it adjusts the PWM of the motors according to the parameters
+        :param LeftSide: Speed of the Left Sided Motors
+        :param RightSide: Speed of the Right Sided Motors
+        :return: None
+        """
+        self.BackLeftPwm.ChangeDutyCycle(LeftSide)
+        self.FrontLeftPwm.ChangeDutyCycle(LeftSide)
+        self.FrontRightPwm.ChangeDutyCycle(RightSide)
+        self.BackRightPwm.ChangeDutyCycle(RightSide)
+
+    def Straight(self):
+        """
+        Sets the direction of all motors as Forward
+        :return: None
+        """
+        GPIO.output(self.Straight, GPIO.HIGH)
+        self.ChangeCycle(70,70)
+
+    def RotateCW(self):
+        """
+        Sets the direction of Left Sided Motors as Forward and Right Sided Motors as Backward
+        :return: None
+        """
+        print("Rotating CW")
+        GPIO.output(self.CW, GPIO.HIGH)
+        GPIO.output(self.CCW, GPIO.LOW)
+        self.ChangeCycle(70,70)
+
+    def RotateCCW(self):
+        """
+        Sets the direction of Right Sided Motors as Forward and Left Sided Motors as Backward
+        :return: None
+        """
+        print("Rotating CCW")
+        GPIO.output(self.CCW, GPIO.HIGH)
+        GPIO.output(self.CW, GPIO.LOW)
+        self.ChangeCycle(70,70)
+
+    def Equalizer(self, LeftSide, RightSide):
+        """
+        Adjusts the PWM of the motors according to the parameters given by the Image Processing Module
+        :param LeftSide: Speed of the Left Sided Motors
+        :param RightSide: Speed of the Right Sided Motors
+        :return: None
+        """
+        print("Equilizing")
+        GPIO.output(self.Straight, GPIO.HIGH)
+        self.ChangeCycle(LeftSide,RightSide)
+
+    def Brake(self):  # Stops the Robot
+        """
+        Sets all motors speed to zero
+        :return: None
+        """
+        print("Brake")
+        self.ChangeCycle(0,0)
+
+    def StopPwm(self):
+        """
+        It completely stops the PWM Signal to the motors and it's called at the end of the Main Program
+        :return: None
+        """
+        print("StopPWM")
+        self.BackLeftPwm.stop()
+        self.FrontLeftPwm.stop()
+        self.FrontRightPwm.stop()
+        self.BackRightPwm.stop()
+
+    def Obstacle(self):
+        self.Brake()
+        for x in range(20,50,5):
+            self.Equalizer(x,x-10)
+            sleep(1)
+        self.Equalizer(50,50)
+        sleep(2)
+        for x in range(20,50,5):
+            self.Equalizer(x-10,x)
+            sleep(1)
+        self.Equalizer(50,50)
+        sleep(2)
+

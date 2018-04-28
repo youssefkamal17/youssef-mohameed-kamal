@@ -1,0 +1,320 @@
+import io
+import cv2
+import numpy as np
+from math import log10
+from picamera import PiCamera
+
+
+class Analyzer():
+    def __init__(self):
+        self.DeadEnd = False  # Flag if a Dead End has been detected or not
+        self.GreenMakerLeft = False # Flag if a Green Marker has been detected at the Left Side of Black Line or not
+        self.GreenMakerRight = False # Flag if a Green Marker has been detected at the Right Side of Black Line or not
+
+        #self.camera.sharpness = 0
+        #self.camera.contrast = 0
+        #self.camera.brightness = 50
+        #self.camera.saturation = 0
+        #self.camera.ISO = 0
+        #self.camera.exposure_compensation = 0
+        #self.camera.exposure_mode = 'auto'
+        #self.camera.meter_mode = 'average'
+        #self.camera.awb_mode = 'auto'
+
+        self.stream = io.BytesIO()  # Creates file object to save the data of the captured image
+        self.camera = PiCamera()  # Creates an Object for the PiCamera
+        self.camera.resolution = (320, 320) # Sets the resolution of the Raspberry Pi Camera to 320p by 320p
+        print("===Image Processing Module Successfully Initialized===")
+
+    def ShowImage(self,image):  # Call that function to display picture
+        cv2.imshow("Lines", image)
+
+        while True:
+            if cv2.waitKey(1) == 27:  # Stop loop when Escape key is entered
+                break
+
+        cv2.destroyAllWindows()
+
+    def main(self):  # Main Program
+        A = cv2.getCPUTickCount()  # Saves the time where the program started
+
+        self.camera.capture(self.stream, format='jpeg')  # Captures a single image and saves it to the stream file object
+        
+        data = np.fromstring(self.stream.getvalue(), dtype=np.uint8)  # Saves the image's data in a Numpy uint8 Array
+
+        image = cv2.imdecode(data, 1)
+        
+        #image = image.reshape(320, 320, 3) # The GPU of the Raspberry Pi resize the captured image for less computations
+
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # Converts image into RGB as OpenCV reads images as BGR
+
+        line = self.LineMask(image) # Calls the LineMask Function
+
+        found, Green_Num, x, y, x2, y2, width = self.GreenMarker(image, line) # Calls the GreenMarker Function
+
+        LeftSide, RightSide = self.Directions(line, x, y, x2, y2, width) # Calls the Directions Function
+
+        EvacFlag = self.EvacEntrance(image, line) # Calls the EvacEntrance Function
+
+        if found == True: # If a Green Marker has been found
+            if Green_Num == 2:
+                if y == y2 or y-5 <= y2 <= y+5 or y2-5 <= y <= y2+5:  # Checks If both green markers at the same level with 5 Pixels uncertainty
+                    self.DeadEnd = True
+                    print("DEAD END!! Turn Around!!!")
+            elif Green_Num == 1:  # If One Marker Is detected:
+                if x > width/2:  # If the X position of the green marker greater than half of the picture's width
+                    self.GreenMakerRight = True
+                    print("Turn 90 Degrees Right")
+                else:
+                    self.GreenMakerLeft = True
+                    print("Turn 90 Degrees Left")
+        else:
+            self.DeadEnd = False
+            self.GreenMakerLeft = False
+            self.GreenMakerRight = False
+
+        B = cv2.getCPUTickCount()  # Saves the time where the program ended
+        time = 1 / cv2.getTickFrequency()   # Saves the time of one CPU Tick
+        print("CPU Time Is ", str(time*(B-A)))  # Prints Program Total Execution Time in Seconds
+        print("=======================END=======================\n")
+        return LeftSide, RightSide, EvacFlag, self.DeadEnd, self.GreenMakerLeft, self.GreenMakerRight
+
+    def LineMask(self,image):
+        """
+        It separates the black line from the captured image by applying thresholding
+        :param image: The raw image captured by the camera
+        :return: Binary image contains the Black Line Only
+        """
+        print(" =LineMask Successfully Called")
+        grayscale = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)  # Converts image to gray scale
+        dnblack = np.uint8([[[0,0,0]]])  # Upper Boundary of Black Color
+        upblack = np.uint8([[[56,56,56]]])  # Lower Boundary of Black Color
+        image_mask = cv2.inRange(grayscale,dnblack,upblack)  # Binary images contains Line of color between the two Boundaries
+        return image_mask
+
+    def Filter_Green_Markers(self, contours, line2, height, width, image):
+        """
+        It filters all the detected green markers into only one or two green markers that're supposed to be seen by the
+        robot
+        :param contours:
+        :param line2: Binary image contains the Black Line Only
+        :param height: Height of the image in terms of Pixels
+        :param width: Width of the image in terms of Pixels
+        :param image: The raw image captured by the camera
+        :return: Returns Number of Green Markers, Image with Borders around green markers and the positions of the
+        supposed green markers to be seen
+        """
+        print(" =Filter_Green_Markers Successfully Called")
+        ContourLength = 0  # Counter for saving True Non-Zero Area Green Markers
+        green_marker_positions = [[] for y in range(0,len(contours),1)]  # Declaring Empty 2D Array of fixed number of rows to store all green marker positions
+        green_marker_positions2 = []  # Saves only supposed seen Green Markers
+
+        '''
+        Declaration of 2D Array of variable number of columns based on the number of contour points of each contour
+        '''
+        j = 0 # Counter of rows
+        for list in contours:  # Loops through the rows of 2D List of contours
+            area = cv2.contourArea(list)
+                        
+            print("List", list, "Area",area)
+
+            if area > 1.0: # If it's non-zero area green marker
+                numberofcontours, bhjs, jbhs = np.shape(list)  # Extracts the number of contour points from the tuple of the contour
+                green_marker_positions[j] = [(0,0) for x in range(0,numberofcontours,1)]  # Creates number of cells based on number of contour points
+                j += 1
+                ContourLength += 1
+
+        '''
+        Contour Points are saved in the form of Numpy int32 Array elements so it has to be converted into tuples to be added
+        in 2D Arrays for easier manipulation
+        '''
+        i = 0  # Counter of rows
+        for list in contours:  # Loops through the rows of 2D List of contours
+            area = cv2.contourArea(list)  # Calculates the area of the contour
+            if area > 1.0: # Checks for False Identified Green Markers by Area Filtration
+                j = 0  # Counter of columns
+                for position in list:  # Loops through the elements of the row
+                    pixelposition = tuple(map(tuple, position))  # Converts from Numpy int32 array into a tuple containing x and y coordinates
+                    pixelposition = str(pixelposition)
+                    pos,rest = pixelposition.split('),')
+                    xb, yb = pos[2:].split(', ')
+                    green_marker_positions[i][j] = (int(xb),int(yb)) # Appends the marker position into the array
+                    j += 1
+                i += 1
+            else:
+                print("Area below zero")
+
+        size = 0  # Counter of the index for green_marker_positions2 array and acts as a counter for Green Markers
+
+        '''
+        The general approach for filtering green markers is finding green markers that has white space only beneath it
+        '''
+
+        print(len(contours))
+        if green_marker_positions:  # Checks if the green_marker_positions array size not equal zero
+            for i in range(0,len(contours),1):
+                Ignore = False  # Flag ==> If green marker has black line beneath it or not to be ignored
+                print(i)
+                x1, y1 = green_marker_positions[i][1] # Splits the tuple into x and y coordinates
+                x2, y2 = green_marker_positions[i][2]
+                row = y2+1 # Starting just under the y coordinate of the green marker by one
+                while x1 < x2:  # Looping through columns from Left to Right
+                    while row < height:  # Looping through rows from Top to Bottom
+                        if line2[row][x1] != np.uint8([[[0]]]):  # If there's no white space under Green Markers
+                            Ignore = True  # Flag indicates that Green Marker should be ignored
+                        row += 1
+                    x1 += 1
+             #(0.0) error
+                if Ignore == False:  # If Green Marker should be seen by the robot
+                    False_Contour = False
+                    for z in range(0,4,1):
+                        if green_marker_positions[i][z] == (0,0):
+                            False_Contour = True
+
+                    if False_Contour == False :
+                        green_marker_positions2.append(green_marker_positions[i])  # Insert that Green Marker into the green_marker_positions2 array
+                        size += 1
+        '''
+        Draws a square around the detected Green Markers for debugging purposes only
+        '''
+        if size != 0:  # If there's No Green Markers
+            for i in range(0,size,1):
+                cv2.rectangle(image,green_marker_positions2[i][0],green_marker_positions2[i][2],(255,255,0),2)
+
+        return size, image, green_marker_positions2
+
+
+    def GreenMarker(self,image,line):  # Finds a Green Marker in the image, its position and draws border around it. Returns If found Green Marker
+        """
+        This function extracts the Green Markers from the image then calls another function for further Green Markers analysis
+        :param image: Original Image taken by the camera in RGB format
+        :param line: Binary Image contains the Black Line Only
+        :return: Number of Green Markers Detected, The positions of Green Markers and the Width of the image
+        """
+        print(" =GreenMarker Successfully Called")
+        greenimage = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)  # Converts image into HSV
+        line2 = line  # Saves the Binary Image of the Line for further Line Segmentation
+        line = cv2.cvtColor(line, cv2.COLOR_GRAY2RGB)
+        greenimage = cv2.bitwise_or(greenimage, cv2.cvtColor(line, cv2.COLOR_RGB2HSV))  # Removes Black line from image and only the green marker stays
+
+
+        height, width, channel = image.shape  # Gets the height, width and number of channels in terms of Pixels
+
+        for row in range(0,height,1):  # Looping through rows of image
+            for columns in range(0,width,1):  # Looping through columns of image
+                h, s, v = greenimage[row][columns]  # Splits the image into its three components
+                if h == s == 0 and v != 255:  # Checks for remaining Black Lines
+                    greenimage[row][columns] = np.uint8([0, 0, 255])  # Filters the image and keeps only Green Markers
+
+        dngreen = np.array([50, 100, 100])  # Lower Boundary of Green Color
+        upgreen = np.array([70, 255, 255])  # Upper Boundary of Green Color
+        green_image_mask = cv2.inRange(greenimage,dngreen,upgreen)  # Returns Binary Image of the green marker only
+
+        line2 = cv2.bitwise_or(line2,green_image_mask)  # Adds the Line Mask and the Green Marker Mask binary Images
+
+        contours = cv2.findContours(green_image_mask,cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_TC89_L1)[-2]  # Finds the borders of the Green Markers
+
+        Green_Marker_Num, image, green_marker_positions = self.Filter_Green_Markers(contours,line2,height,width,image)
+
+        print(Green_Marker_Num, "Green Markers")  # Print Number of contour points which are basically number of Green Markers
+
+        #self.ShowImage(green_image_mask)
+        if Green_Marker_Num != 0:
+            x , y = green_marker_positions[0][0]  # Saves Coordinates of the First Green Marker
+            x2 , y2 = green_marker_positions[0][0]
+            return True, Green_Marker_Num, x, y, x2, y2,width
+
+        else:
+            return False, None, None, None, None, None, None
+
+    def Directions(self,image, x, y, x2, y2, width):
+        """
+        It determines how much the motors at each side to be adjusted by changing the motors speed in relation with the
+        captured image
+        :param image: The raw image captured by the camera
+        :param x: X coordinate of the First Green Marker
+        :param y: Y coordinate of the First Green Marker
+        :param x2: X coordinate of the Second Green Marker
+        :param y2: Y coordinate of the Second Green Marker
+        :param width: The width of the image in terms of pixels
+        :return: Speed of motors at each side
+        """
+        print(" =Directions Successfully Called")
+        height, width = image.shape  # Gets the height, width in terms of Pixels
+        left = 0  # Number of White Pixels at the Left Side of the Black Line in each row
+        sumleft = 1  # Final Sum of White Pixels at the Left Side of the Black Line
+        flagleft=0  # Flag if Black Pixel is Found to stop iteration at the Left Side of the Black Line
+        right = 0  # Number of White Pixels at the Right Side of the Black Line in each row
+        sumright = 1  # Final Sum of White Pixels at the Right Side of the Black Line
+        flagright=0  # Flag if Black Pixel is Found to stop iteration at the Right Side of the Black Line
+
+        for row in range(1,height,1):  # Looping through rows of image
+            flagleft = 0  # Didn't Find Black Pixels
+            left = 0
+            for columns in range(1,width,1):  # Looping through columns of image
+                if image[row][columns] == np.uint8([[[0]]]):  # Finds for Black Pixels as the input image is inverted binary
+                    left += 1  # Increments by One
+                else:
+                    flagleft = 1  # Found Black Line
+                    break  # Stop Looping
+
+            if flagleft==0:  # Sets number of White Pixels to Zero if Black Line not Found in Case of Curved Lines
+                left = 0
+            else:
+                sumleft += left
+
+
+        for row in range(1,height,1):
+            flagright = 0
+            right = 0
+            for columns in range(width-1,1,-1):
+                if image[row][columns] == np.uint8([[[0]]]):
+                    right += 1
+                else:
+                    flagright = 1
+                    break
+            if flagright==0:
+                right = 0
+            else:
+                sumright += right
+
+        print("Number of Pixels at Left Side", sumleft)
+        print("Number of Pixels at Right Side", sumright)
+        print("Left side:", int((float(sumleft)/(float(height * width))) * 100), "percent, Right Side:",int((float(sumright)/(float(height * width))) * 100),"percent")
+
+        if int(log10(float(sumleft)/float(sumright)) * 10) < 0:  # Calculates the ratio between number of White Pixels between the Left and the Right Side
+            print("Turn Left")
+            return int((sumleft/(height * width)) * 100), int(float(sumright)/(float(height * width) * 100))
+        elif int(log10(float(sumleft)/float(sumright)) * 10) > 0:
+            print("Turn Right")
+            return int((sumleft/(height * width)) * 100), int(float(sumright)/(float(height * width) * 100))
+        elif int(log10(float(sumleft)/float(sumright)) * 10) == 0:
+            print("Straight")
+            return 70,70  # Returns the number 70, the duty cycle of the Left and Right sides of the robot
+
+    def EvacEntrance(self,image, line):
+        """
+        Detects the silver tape at the entrance of the evacuation zone by applying thresholding
+        :param image: The raw image captured by the camera
+        :param line: Binary image contains the Black Line Only
+        :return: Flag whether a Silver Tape detected or not
+        """
+        print(" =EvacEntrance Successfully Called")
+        silverimage = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) # convert from BGR to grey scale
+        silverimage = cv2.bitwise_or(silverimage, line) # detection to the silver tape
+        gvj, output = cv2.threshold(silverimage, 180, 255, cv2.THRESH_TOZERO_INV)  # Turns Non Silver Lines to Black and the SIlver line only Stays
+
+        pixels = 0  # Counter for the remaining Non Silver pixels
+        height, width, channel = image.shape
+         # checking if the silver detected is the tape or error
+        for row in range(1,height,1):
+            for columns in range(1,width,1):
+                if output[row][columns] != 0:
+                    pixels += 1  # Increments by one if it's Non Silver pixel
+
+        if (pixels/(width*height)*100) < 5:  # Compares between the number of Non Silver Pixels and Total Number of Image Pixels
+            print("No Evacuation Zone")
+            return False
+        elif 5 < (pixels/(width*height)*100) < 25:
+            print("Entering Evacuation Zone")
+            return True

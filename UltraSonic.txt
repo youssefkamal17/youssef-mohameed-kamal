@@ -1,0 +1,60 @@
+from time import time, sleep
+import RPi.GPIO as GPIO
+
+GPIO.setwarnings(False)  # Ignore any errors from initial Pin Configurations
+GPIO.setmode(GPIO.BCM)  # Sets the Pin numbering mode to Broadcom SOC mode "GPIO Mode"
+
+class Obstacle():
+    def __init__(self):
+        self.Trig = 4  # Trigger Pin
+        self.Front = 17  # Echo Pin
+
+        GPIO.setup(self.Trig, GPIO.OUT)  # Sets Trigger pin as Output Pin
+        GPIO.setup(self.Front, GPIO.IN)  # Sets Echo pin as Output Pin
+
+        self.StartTime = 0  # Saves the time once the input signal is High
+        self.EndTime = 0  # Saves the time once the input signal is Low
+        self.Distance = 0  # Saves the measured distance
+
+        self.ObstacleFlag = 0  # Flag if obstacle is detected or not
+
+        print("Ultrasonic Module Initialized Successfully")
+
+    def Trigger(self):
+        """
+        Trigs the Ultrasonic to send 8 bursts of ultrasonic waves
+        :return: None
+        """
+        GPIO.output(self.Trig, GPIO.LOW)  # Prepares for Clean Output Signal by completely turning off that pin
+        sleep(0.000005)
+        GPIO.output(self.Trig, GPIO.HIGH)  # Output Signal for 10 microseconds to output 8 bursts of Ultrasonic Waves
+        sleep(0.00001)
+        GPIO.output(self.Trig, GPIO.LOW)
+        self.Echo()
+
+    def Echo(self):
+        """
+        Retrieves the distance measured by the Ultrasonic Sensor
+        :return: Flag if there's an obstacle in front of the robot or not
+        """
+        while GPIO.input(self.Front) == 0:
+            self.StartTime = time()  # Records first instant the Ultrasonic input is High
+        while GPIO.input(self.Front) == 1:
+            self.EndTime = time()  # Records last instant the Ultrasonic input is High
+
+        PulseTime = self.EndTime - self.StartTime  # Records how much time Ultrasonic sensor is high which indicates distance
+
+        self.Distance = (34300/2) * PulseTime  # Calculates Distance
+
+        if self.Distance < 15:  # If distance is less than 15 cm
+            self.ObstacleFlag = 1
+        else:
+            self.ObstacleFlag = 0
+
+    def Trigg(self):  # Main Program
+        self.Trigger()
+        return self.ObstacleFlag  # Returns if there's obstacle or not
+
+    def get_Distance(self):  # returns distance for debugging purposes
+        return int(self.Distance)
+

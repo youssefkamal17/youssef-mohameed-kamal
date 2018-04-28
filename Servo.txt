@@ -1,0 +1,39 @@
+from time import sleep
+import RPi.GPIO as GPIO
+
+GPIO.setwarnings(False)  # Ignore any errors from initial Pin Configurations
+GPIO.setmode(GPIO.BCM)  # Sets the Pin numbering mode to Broadcom SOC mode "GPIO Mode"
+
+class ControlServo():
+    def __init__(self):
+        self.ArmPin = 6  # The pin to control the servo which lifts the Grabber Arm Up or Down
+        self.GrabPin = 25  # The pin to control the servo which Closes or Opens the Grabber
+
+        self.Frequency = 50  # Frequency of the Pulse Width Modulation
+
+        self.Pins = [self.ArmPin, self.GrabPin]
+        GPIO.setup(self.Pins, GPIO.OUT)  # Sets all motor pins as Output
+
+        self.Armpwm = GPIO.PWM(self.ArmPin, self.Frequency)
+        self.Armpwm.start(0)
+
+        self.Grabpwm = GPIO.PWM(self.GrabPin, self.Frequency)
+        self.Grabpwm.start(0)
+
+        print("Servo Module Initialized Successfully")
+
+    def Up(self):
+        self.Armpwm.ChangeDutyCycle(9)
+
+    def Down(self):
+        self.Armpwm.ChangeDutyCycle(5)
+
+    def Grab(self):
+        self.Armpwm.ChangeDutyCycle(9)
+
+    def Release(self):
+        self.Armpwm.ChangeDutyCycle(5)
+
+    def StopPWM(self):
+        self.Armpwm.stop()
+        self.Grabpwm.stop()
